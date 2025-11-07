@@ -641,6 +641,12 @@ def main():
         submitted = st.form_submit_button("Find Product Ideas")
     
     if submitted and domain:
+        # Clear any loaded historical data when starting a new search
+        if 'loaded_ideas' in st.session_state:
+            del st.session_state['loaded_ideas']
+        if 'loaded_domain' in st.session_state:
+            del st.session_state['loaded_domain']
+        
         with st.spinner("Searching for related subreddits..."):
             subreddits = search_subreddits(domain, max_subreddits)
         
