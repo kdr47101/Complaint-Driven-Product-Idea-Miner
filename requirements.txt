@@ -1,0 +1,6 @@
+streamlit
+praw
+google-generativeai
+pandas
+python-dotenv
+pymongo
