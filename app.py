@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from datetime import datetime
+import certifi
 
 # Load environment variables
 load_dotenv()
@@ -50,12 +51,17 @@ def init_mongodb():
     mongo_uri = get_credential("MONGODB_URI")
     if mongo_uri:
         try:
-            client = MongoClient(mongo_uri)
+            client = MongoClient(
+                mongo_uri,
+                tls=True,
+                tlsAllowInvalidCertificates=True,
+                serverSelectionTimeoutMS=5000  # Faster timeout for initial connection
+            )
             # Test connection
             client.admin.command('ping')
             return client
         except Exception as e:
-            st.warning(f"MongoDB connection failed: {e}")
+            # Silently fail - don't show warning in sidebar
             return None
     return None
 
@@ -408,7 +414,8 @@ def save_ideas_to_mongodb(ideas: List[Dict], domain: str):
         st.error(f"Error saving to MongoDB: {e}")
         return False
     finally:
-        client.close()
+        if client:
+            client.close()
 
 def get_historical_runs(limit: int = 10) -> List[Dict]:
     """Get historical runs from MongoDB"""
@@ -447,10 +454,11 @@ def get_historical_runs(limit: int = 10) -> List[Dict]:
         return formatted_runs
         
     except Exception as e:
-        st.error(f"Error fetching historical data: {e}")
+        # Silently fail - don't show errors in sidebar
         return []
     finally:
-        client.close()
+        if client:
+            client.close()
 
 def load_run_from_mongodb(domain: str):
     """Load a specific run from MongoDB by domain"""
@@ -492,7 +500,8 @@ def load_run_from_mongodb(domain: str):
         st.error(f"Error loading run: {e}")
         return None
     finally:
-        client.close()
+        if client:
+            client.close()
 
 def render_table(ideas: List[Dict]):
     """Render the results table and provide CSV download"""
@@ -576,6 +585,58 @@ def main():
     
     st.title("Complaint-Driven Product Idea Miner")
     st.markdown("Discover product opportunities by analyzing Reddit complaints about any domain or company.")
+    
+    # Sidebar with history
+    with st.sidebar:
+        st.header("Search History")
+        
+        # Get historical runs
+        historical_runs = get_historical_runs(limit=20)
+        
+        if historical_runs:
+            st.caption(f"Found {len(historical_runs)} previous searches")
+            
+            for run in historical_runs:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    # Format timestamp
+                    timestamp_str = run['timestamp'].strftime("%m/%d %H:%M") if run['timestamp'] else "Unknown"
+                    
+                    # Create clickable button for each historical run
+                    if st.button(
+                        f"{run['domain']}", 
+                        key=f"hist_{run['domain']}_{timestamp_str}",
+                        help=f"{run['total_ideas']} ideas • {timestamp_str}"
+                    ):
+                        # Load this run
+                        loaded_run = load_run_from_mongodb(run['domain'])
+                        if loaded_run:
+                            st.session_state['loaded_ideas'] = loaded_run['ideas']
+                            st.session_state['loaded_domain'] = loaded_run['domain']
+                            st.rerun()
+                
+                with col2:
+                    st.caption(f"{run['total_ideas']}")
+            
+            # Add a divider
+            st.divider()
+            
+            # Clear history button
+            if st.button("Clear History", help="Delete all historical data"):
+                if st.button("Confirm Delete", key="confirm_delete"):
+                    client = init_mongodb()
+                    if client:
+                        try:
+                            db = client['product_ideas']
+                            result = db['ideas'].delete_many({})
+                            st.success(f"Deleted {result.deleted_count} records")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error clearing history: {e}")
+                        finally:
+                            client.close()
+        else:
+            st.info("No search history yet. Run your first search!")
     
     # Debug: Show what credentials are being loaded
     with st.expander("Debug: Credential Status"):
