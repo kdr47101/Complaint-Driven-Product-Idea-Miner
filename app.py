@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from datetime import datetime
 import certifi
+import re  # <-- added
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +20,47 @@ COMPLAINT_KEYWORDS = [
     "problem", "issue", "pain", "hate", "wish", "annoy", "bug", "broken", 
     "missing", "can't", "cannot", "frustrat", "terrible", "awful", "sucks"
 ]
+# Ignore generic/broad subreddits that often pollute results
+BAD_SUBS = {
+    'todayilearned', 'til', 'askreddit', 'pics', 'funny', 'news', 'worldnews',
+    'videos', 'gaming', 'aww', 'movies', 'television', 'music', 'mildlyinteresting',
+    'technology', 'science', 'space', 'outoftheloop', 'emmawatson'
+}
+# NEW: NSFW keyword blacklist (name or description match => reject)
+NSFW_KEYWORDS = {
+    'nsfw','porn','fetish','sex','sexual','erotic','xxx','adult','nude','naked',
+    'cum','fap','fuck','bdsm','horny','kink','escort','sexy','strip','boobs',
+    'ass','cock','milf','hentai','gayporn','transporn','sissy','thong','deepthroat'
+}
+
+def _domain_tokens(domain: str) -> List[str]:
+    """Tokenize domain/topic. Drop very short/generic tokens."""
+    s = domain.lower()
+    tokens = re.findall(r'[a-z0-9]+', s)
+    stop = {'www','com','net','org','io','co','the','and','for','app','site'}
+    return [t for t in tokens if len(t) >= 3 and t not in stop]
+
+def _has_token(text: str, tokens: List[str]) -> bool:
+    tl = text.lower()
+    return any(t in tl for t in tokens)
+
+def is_sfw_subreddit(subreddit) -> bool:
+    """Return True if subreddit is safe-for-work and not quarantined, and passes keyword heuristic."""
+    try:
+        # Native flags
+        if getattr(subreddit, 'over18', False):
+            return False
+        if getattr(subreddit, 'quarantine', False) or getattr(subreddit, 'quarantined', False):
+            return False
+        name_l = getattr(subreddit, 'display_name', '') .lower()
+        desc_l = (getattr(subreddit, 'public_description', '') or '').lower()
+        # Keyword heuristic (name or description containing NSFW keywords)
+        for kw in NSFW_KEYWORDS:
+            if kw in name_l or kw in desc_l:
+                return False
+        return True
+    except Exception:
+        return False
 
 def get_credential(key: str) -> str:
     """Get credential from Streamlit secrets or environment variables"""
@@ -70,58 +112,76 @@ def search_subreddits(domain: str, limit: int = 10) -> List[str]:
     """Search for subreddits related to a domain or topic"""
     reddit = init_reddit()
     subreddits = set()
+    tokens = _domain_tokens(domain)
+    domain_lower = domain.lower()
     
     try:
-        # First, try to find subreddits by searching for the topic/domain name
         # Search in subreddit names and descriptions
-        for subreddit in reddit.subreddits.search(domain, limit=limit * 3):
-            # Filter out NSFW, private, or banned subreddits
-            if not subreddit.over18 and subreddit.subreddit_type == 'public':
+        for subreddit in reddit.subreddits.search(domain, limit=limit * 5):
+            name_l = subreddit.display_name.lower()
+            if name_l in BAD_SUBS:
+                continue
+            if not is_sfw_subreddit(subreddit):
+                continue
+            desc = getattr(subreddit, 'public_description', '') or ''
+            if tokens and not (_has_token(name_l, tokens) or _has_token(desc, tokens)):
+                continue
+            if subreddit.subreddit_type == 'public':
                 subreddits.add(subreddit.display_name)
                 if len(subreddits) >= limit:
                     break
-        
-        # If we didn't find enough subreddits, search for posts about the topic
-        # and collect unique subreddits
+        # Posts (year)
         if len(subreddits) < limit:
             try:
-                search_query = domain
-                for submission in reddit.subreddit("all").search(search_query, limit=100, time_filter='year'):
-                    if submission.subreddit.subreddit_type == 'public' and not submission.subreddit.over18:
-                        # Check if subreddit name or description is related to the domain
-                        sub_name_lower = submission.subreddit.display_name.lower()
-                        domain_lower = domain.lower()
-                        
-                        # Add subreddit if its name contains the search term or is clearly related
-                        if (domain_lower in sub_name_lower or 
-                            any(word in sub_name_lower for word in domain_lower.split())):
-                            subreddits.add(submission.subreddit.display_name)
-                            if len(subreddits) >= limit:
-                                break
+                for submission in reddit.subreddit("all").search(domain, limit=150, time_filter='year'):
+                    if getattr(submission, 'over_18', False):
+                        continue
+                    if not is_sfw_subreddit(submission.subreddit):
+                        continue
+                    name_l = submission.subreddit.display_name.lower()
+                    if name_l in BAD_SUBS:
+                        continue
+                    if any(kw in name_l for kw in NSFW_KEYWORDS):
+                        continue
+                    title_l = (submission.title or '').lower()
+                    if tokens and not (_has_token(title_l, tokens) or _has_token(name_l, tokens)):
+                        continue
+                    if submission.subreddit.subreddit_type == 'public':
+                        subreddits.add(submission.subreddit.display_name)
+                        if len(subreddits) >= limit:
+                            break
             except Exception as e:
                 st.warning(f"Could not search posts: {e}")
-        
-        # If still not enough, get most relevant subreddits from post search
+        # Posts (month)
         if len(subreddits) < limit:
             try:
-                for submission in reddit.subreddit("all").search(domain, limit=50, time_filter='month'):
-                    if submission.subreddit.subreddit_type == 'public' and not submission.subreddit.over18:
+                for submission in reddit.subreddit("all").search(domain, limit=80, time_filter='month'):
+                    if getattr(submission, 'over_18', False):
+                        continue
+                    if not is_sfw_subreddit(submission.subreddit):
+                        continue
+                    name_l = submission.subreddit.display_name.lower()
+                    if name_l in BAD_SUBS:
+                        continue
+                    if any(kw in name_l for kw in NSFW_KEYWORDS):
+                        continue
+                    title_l = (submission.title or '').lower()
+                    if tokens and not (_has_token(title_l, tokens) or _has_token(name_l, tokens)):
+                        continue
+                    if submission.subreddit.subreddit_type == 'public':
                         subreddits.add(submission.subreddit.display_name)
                         if len(subreddits) >= limit:
                             break
             except Exception as e:
                 st.warning(f"Could not expand search: {e}")
-                
     except Exception as e:
         st.error(f"Error searching subreddits: {e}")
         return []
-    
-    result = list(subreddits)[:limit]
-    
-    # Show a note if we're filtering results
+    # Final SFW filtering pass (defensive)
+    filtered = [s for s in subreddits if is_sfw_subreddit(reddit.subreddit(s))]
+    result = filtered[:limit]
     if result:
-        st.caption(f"Found {len(result)} relevant subreddits (filtered for public, SFW communities)")
-    
+        st.caption(f"Found {len(result)} relevant subreddits (public, SFW, token-matched)")
     return result
 
 @st.cache_data(ttl=1800)
@@ -132,7 +192,14 @@ def fetch_posts(subreddit_name: str, limit: int = 25) -> List[Dict]:
     
     try:
         subreddit = reddit.subreddit(subreddit_name)
+        if not is_sfw_subreddit(subreddit):
+            return posts
         for submission in subreddit.new(limit=limit):
+            if getattr(submission, 'over_18', False):
+                continue
+            title_l = (submission.title or '').lower()
+            if any(kw in title_l for kw in NSFW_KEYWORDS):
+                continue
             posts.append({
                 'id': submission.id,
                 'title': submission.title,
@@ -141,13 +208,9 @@ def fetch_posts(subreddit_name: str, limit: int = 25) -> List[Dict]:
                 'created_utc': submission.created_utc,
                 'subreddit': subreddit_name
             })
-            
-        # Respect rate limits - small delay between requests
         time.sleep(0.5)
-        
     except Exception as e:
         st.warning(f"Could not fetch posts from r/{subreddit_name}: {e}")
-    
     return posts
 
 @st.cache_data(ttl=1800)
@@ -158,40 +221,45 @@ def fetch_comments(post_id: str, subreddit_name: str, limit: int = 50) -> List[D
     
     try:
         submission = reddit.submission(id=post_id)
-        submission.comments.replace_more(limit=0)  # Remove "more comments"
-        
+        if getattr(submission, 'over_18', False) or not is_sfw_subreddit(submission.subreddit):
+            return comments
+        title_l = (submission.title or '').lower()
+        if any(kw in title_l for kw in NSFW_KEYWORDS):
+            return comments
+        submission.comments.replace_more(limit=0)
         for comment in submission.comments[:limit]:
             if hasattr(comment, 'body') and comment.body != '[deleted]':
+                body_l = comment.body.lower()
+                if any(kw in body_l for kw in NSFW_KEYWORDS):
+                    continue
                 comments.append({
                     'body': comment.body,
                     'score': comment.score,
                     'created_utc': comment.created_utc,
                     'post_id': post_id,
                     'subreddit': subreddit_name,
-                    'post_url': f"https://reddit.com{submission.permalink}"
+                    'post_url': f"https://reddit.com{submission.permalink}",
+                    'post_title': submission.title or ""
                 })
-                
-        # Respect rate limits
         time.sleep(0.3)
-        
     except Exception as e:
         st.warning(f"Could not fetch comments for post {post_id}: {e}")
-    
     return comments
 
-def filter_complaints(comments: List[Dict]) -> List[Dict]:
-    """Filter comments that contain complaint keywords"""
+def filter_complaints(comments: List[Dict], domain: str) -> List[Dict]:
+    """Filter comments that contain complaint keywords and are on-topic"""
+    tokens = _domain_tokens(domain)
     complaint_comments = []
-    
-    for comment in comments:
-        body_lower = comment['body'].lower()
-        if any(keyword in body_lower for keyword in COMPLAINT_KEYWORDS):
-            complaint_comments.append(comment)
-    
+    for c in comments:
+        body_lower = c['body'].lower()
+        post_title_lower = (c.get('post_title') or '').lower()
+        # Require complaint signal AND domain token in body or post title
+        if any(k in body_lower for k in COMPLAINT_KEYWORDS) and (_has_token(body_lower, tokens) or _has_token(post_title_lower, tokens)):
+            complaint_comments.append(c)
     return complaint_comments
 
 @st.cache_data(ttl=3600)
-def extract_ideas(comments: List[Dict]) -> List[Dict]:
+def extract_ideas(comments: List[Dict], domain: str) -> List[Dict]:
     """Extract product ideas from complaint comments using Gemini"""
     if not comments:
         return []
@@ -202,95 +270,67 @@ def extract_ideas(comments: List[Dict]) -> List[Dict]:
         return []
     
     ideas = []
-    
-    # Limit comments to avoid excessive API calls
-    # Free tier: 10 requests per minute (resets every minute)
-    max_comments = 30  # Process max 30 comments (3 batches of 10) to stay well under limit
+    max_comments = 30
     comments = comments[:max_comments]
-    
-    # Process comments in batches of 10
     batch_size = 10
     batch_count = len(comments) // batch_size + (1 if len(comments) % batch_size else 0)
     
     st.info(f"Processing {len(comments)} comments in {batch_count} batches. This will take ~{batch_count * 10} seconds due to API rate limits.")
     st.info("Free tier limit: 10 requests/minute. Quota resets every minute.")
     
+    tokens = _domain_tokens(domain)
+    
     for i in range(0, len(comments), batch_size):
         batch = comments[i:i + batch_size]
         batch_num = (i // batch_size) + 1
         
-        # Prepare prompt
+        # Prepare prompt with strict on-topic rules
         comments_text = ""
-        for j, comment in enumerate(batch):
-            comments_text += f"Comment {j+1} (from r/{comment['subreddit']}, {comment['score']} upvotes):\n{comment['body']}\n\n"
+        for j, c in enumerate(batch):
+            comments_text += f"Comment {j+1} (from r/{c['subreddit']}, {c['score']} upvotes):\n{c['body']}\n\n"
         
         prompt = f"""
-        Analyze these Reddit comments and extract product ideas that could solve the complaints mentioned.
-        For each complaint that suggests a clear product opportunity, return a JSON object with these fields:
-        - idea: A concise product idea (max 100 chars)
-        - quality_score: Your assessment of product quality from 0-100 (higher = better quality)
-        - rationale: Why this addresses the complaint and why it's high quality (max 150 chars)  
-        - source_comment: The original comment text
-        - subreddit: The subreddit name
-        - upvotes: The comment's upvote score
-        - post_url: The post URL
-        - relevance_score: How relevant this idea is to the subreddit/complaint context (0-100)
-        
-        IMPORTANT CRITERIA:
-        1. Strong commercial viability - Clear market demand and monetization potential
-        2. Technically feasible - Can be built with current technology within reasonable budget
-        3. Highly relevant - Must be directly related to the complaint and the subreddit's topic
-        4. Specific and actionable - Not vague concepts but concrete product ideas
-        
-        Evaluate quality based on:
-        - Market demand (evident from complaint frequency/intensity)
-        - Technical feasibility (realistic to build)
-        - Potential user base size
-        - Competition gaps
-        - Revenue potential
-        - Relevance to the complaint context
-        
-        ONLY include ideas that score 60+ on BOTH quality_score AND relevance_score.
-        Reject ideas that are:
-        - Too broad or generic
-        - Unrelated to the subreddit's topic
-        - Technically impossible or extremely difficult
-        - Already well-served by existing products
-        
-        Return ONLY a valid JSON array of objects. Do not include any explanation or markdown formatting.
-        Rank ideas by combined quality and relevance internally.
-        
+        You are extracting product ideas for the domain/topic: "{domain}".
+        ONLY include ideas that are directly related to this domain/topic.
+        If an idea is not clearly related, do not include it.
+
+        Return a JSON array; each object has:
+        - idea: concise product idea (max 100 chars)
+        - relevance_score: 0-100 (strong relation to "{domain}")
+        - rationale: brief reason (max 150 chars)
+        - source_comment: original comment text
+        - subreddit, upvotes, post_url (if present)
+
+        Rules:
+        - Exclude off-topic ideas.
+        - No speculation beyond comment context.
+        - Return ONLY a JSON array (no extra text).
+
         Comments:
         {comments_text}
         """
         
-        # Retry logic with exponential backoff
         max_retries = 2
         for attempt in range(max_retries):
             try:
                 st.text(f"Processing batch {batch_num}/{batch_count} (attempt {attempt + 1}/{max_retries})...")
                 response = model.generate_content(prompt)
-                content = response.text
+                content = response.text or ""
                 
-                # Debug: show first 200 chars of response
                 if content:
                     st.caption(f"Response preview: {content[:200]}...")
                 
-                # Extract JSON from response (handle markdown code blocks)
                 if '```json' in content:
                     content = content.split('```json')[1].split('```')[0].strip()
                 elif '```' in content:
                     content = content.split('```')[1].split('```')[0].strip()
                 
-                # Try to parse JSON
                 try:
                     batch_ideas = json.loads(content)
                 except json.JSONDecodeError as json_err:
                     st.error(f"JSON parsing failed. Raw response: {content[:500]}")
                     st.error(f"JSON error: {json_err}")
-                    # Try to find if there's any JSON-like content
                     if '[' in content and ']' in content:
-                        # Try to extract just the array part
                         start = content.find('[')
                         end = content.rfind(']') + 1
                         json_substring = content[start:end]
@@ -302,52 +342,46 @@ def extract_ideas(comments: List[Dict]) -> List[Dict]:
                     else:
                         raise json_err
                 
-                # Ensure we have a list
                 if not isinstance(batch_ideas, list):
                     batch_ideas = [batch_ideas]
                 
-                # Ensure we have the required fields and add missing data
                 for idea in batch_ideas:
-                    # Check for required fields including relevance_score
-                    required_fields = ['idea', 'source_comment', 'quality_score', 'relevance_score']
-                    if all(field in idea for field in required_fields):
-                        # Filter by minimum scores (changed to 60)
-                        quality = idea.get('quality_score', 0)
-                        relevance = idea.get('relevance_score', 0)
-                        
-                        if quality >= 60 and relevance >= 60:
-                            # Find matching comment for additional data
-                            for comment in batch:
-                                if comment['body'] == idea['source_comment']:
-                                    idea['subreddit'] = comment['subreddit']
-                                    idea['upvotes'] = comment['score']
-                                    idea['post_url'] = comment['post_url']
-                                    break
-                            # Calculate combined score for ranking
-                            idea['combined_score'] = (quality * 0.6) + (relevance * 0.4)
-                            ideas.append(idea)
+                    required = ['idea', 'source_comment', 'relevance_score']
+                    if not all(f in idea for f in required):
+                        continue
+                    relevance = idea.get('relevance_score', 0) or 0
+                    idea_text = (idea.get('idea') or '') + ' ' + (idea.get('rationale') or '') + ' ' + (idea.get('source_comment') or '')
+                    if tokens and not _has_token(idea_text, tokens):
+                        continue
+                    if relevance >= 60:
+                        for c in batch:
+                            if c['body'] == idea['source_comment']:
+                                idea['subreddit'] = c['subreddit']
+                                idea['upvotes'] = c['score']
+                                idea['post_url'] = c['post_url']
+                                break
+                        idea.setdefault('subreddit', '')
+                        idea.setdefault('upvotes', 0)
+                        idea['relevance_score'] = int(relevance)
+                        idea['combined_score'] = relevance
+                        # quality_score removed
+                        ideas.append(idea)
                 
-                # Success - break retry loop
                 st.text(f"Batch {batch_num} completed successfully! Extracted {len(batch_ideas)} ideas.")
                 break
                 
             except Exception as e:
                 error_msg = str(e)
-                
-                # Check if it's a rate limit error
                 if '429' in error_msg or 'quota' in error_msg.lower():
-                    # Extract wait time from error message if available
                     wait_time = 60
                     if 'retry in' in error_msg.lower():
                         try:
-                            # Extract seconds from error message
-                            import re
-                            match = re.search(r'retry in (\d+\.?\d*)', error_msg.lower())
+                            import re as _re
+                            match = _re.search(r'retry in (\d+\.?\d*)', error_msg.lower())
                             if match:
                                 wait_time = float(match.group(1)) + 2
                         except:
                             pass
-                    
                     if attempt < max_retries - 1:
                         st.warning(f"Rate limit hit. Waiting {wait_time:.0f} seconds for quota to reset...")
                         time.sleep(wait_time)
@@ -363,19 +397,17 @@ def extract_ideas(comments: List[Dict]) -> List[Dict]:
                         st.error(f"Error extracting ideas from batch {batch_num}: {e}")
                         break
         
-        # Rate limiting between batches
         if i + batch_size < len(comments):
             wait_seconds = 10
             st.text(f"Waiting {wait_seconds} seconds before next batch (API rate limit)...")
             time.sleep(wait_seconds)
     
-    # Sort by combined score (quality 60% + relevance 40%) descending
     if ideas:
         ideas.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
-        st.info(f"Filtered to {len(ideas)} high-quality, relevant ideas (quality ≥60, relevance ≥60)")
+        st.info(f"Filtered to {len(ideas)} relevant ideas (relevance ≥60)")
         return ideas[:10]
     else:
-        st.warning("No high-quality ideas could be extracted. Try a different domain or adjust search parameters.")
+        st.warning("No relevant ideas could be extracted. Try a different domain or adjust search parameters.")
         return []
 
 def save_ideas_to_mongodb(ideas: List[Dict], domain: str):
@@ -397,7 +429,6 @@ def save_ideas_to_mongodb(ideas: List[Dict], domain: str):
                 'comment': idea.get('source_comment', ''),
                 'upvotes': idea.get('upvotes', 0),
                 'product_idea': idea.get('idea', ''),
-                'quality_score': idea.get('quality_score', 0),
                 'relevance_score': idea.get('relevance_score', 0),
                 'combined_score': idea.get('combined_score', 0),
                 'rank': rank,
@@ -484,7 +515,6 @@ def load_run_from_mongodb(domain: str):
                     'source_comment': idea.get('comment', ''),
                     'upvotes': idea.get('upvotes', 0),
                     'idea': idea.get('product_idea', ''),
-                    'quality_score': idea.get('quality_score', 0),
                     'relevance_score': idea.get('relevance_score', 0)
                 })
             
@@ -511,26 +541,26 @@ def render_table(ideas: List[Dict]):
     
     # Convert to DataFrame
     df = pd.DataFrame(ideas)
-    
-    # Reorder columns for the requested format
-    display_columns = ['subreddit', 'source_comment', 'upvotes', 'idea', 'quality_score', 'relevance_score']
+    # Ensure required columns exist (avoid KeyError)
+    required_cols = ['subreddit','source_comment','upvotes','idea','relevance_score']
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = 0 if col in ['upvotes','relevance_score'] else ''
+    display_columns = required_cols
     df = df[display_columns]
-    df.columns = ['Subreddit', 'Original Comment', 'Upvotes', 'Product Idea', 'Quality', 'Relevance']
+    df.columns = ['Subreddit', 'Original Comment', 'Upvotes', 'Product Idea', 'Relevance']
     
     # Display metrics
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("Top Ideas Found", len(df))
     with col2:
         st.metric("Unique Subreddits", df['Subreddit'].nunique())
-    with col3:
-        avg_quality = df['Quality'].mean()
-        st.metric("Avg Quality", f"{avg_quality:.0f}/100")
     
     # Add ranking column
     df.insert(0, 'Rank', range(1, len(df) + 1))
     
-    st.subheader("Top Product Ideas (Ranked by Quality & Relevance)")
+    st.subheader("Top Product Ideas (Ranked by Relevance)")
     
     # Display table
     st.dataframe(
@@ -553,11 +583,6 @@ def render_table(ideas: List[Dict]):
             "Upvotes": st.column_config.NumberColumn(
                 "Upvotes",
                 width="small"
-            ),
-            "Quality": st.column_config.NumberColumn(
-                "Quality",
-                width="small",
-                help="Product quality score (0-100)"
             ),
             "Relevance": st.column_config.NumberColumn(
                 "Relevance",
@@ -585,58 +610,6 @@ def main():
     
     st.title("Complaint-Driven Product Idea Miner")
     st.markdown("Discover product opportunities by analyzing Reddit complaints about any domain or company.")
-    
-    # Sidebar with history
-    with st.sidebar:
-        st.header("Search History")
-        
-        # Get historical runs
-        historical_runs = get_historical_runs(limit=20)
-        
-        if historical_runs:
-            st.caption(f"Found {len(historical_runs)} previous searches")
-            
-            for run in historical_runs:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    # Format timestamp
-                    timestamp_str = run['timestamp'].strftime("%m/%d %H:%M") if run['timestamp'] else "Unknown"
-                    
-                    # Create clickable button for each historical run
-                    if st.button(
-                        f"{run['domain']}", 
-                        key=f"hist_{run['domain']}_{timestamp_str}",
-                        help=f"{run['total_ideas']} ideas • {timestamp_str}"
-                    ):
-                        # Load this run
-                        loaded_run = load_run_from_mongodb(run['domain'])
-                        if loaded_run:
-                            st.session_state['loaded_ideas'] = loaded_run['ideas']
-                            st.session_state['loaded_domain'] = loaded_run['domain']
-                            st.rerun()
-                
-                with col2:
-                    st.caption(f"{run['total_ideas']}")
-            
-            # Add a divider
-            st.divider()
-            
-            # Clear history button
-            if st.button("Clear History", help="Delete all historical data"):
-                if st.button("Confirm Delete", key="confirm_delete"):
-                    client = init_mongodb()
-                    if client:
-                        try:
-                            db = client['product_ideas']
-                            result = db['ideas'].delete_many({})
-                            st.success(f"Deleted {result.deleted_count} records")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error clearing history: {e}")
-                        finally:
-                            client.close()
-        else:
-            st.info("No search history yet. Run your first search!")
     
     # Debug: Show what credentials are being loaded
     with st.expander("Debug: Credential Status"):
@@ -675,16 +648,6 @@ def main():
             """)
         return
     
-    # Check if we're displaying a loaded historical run
-    if 'loaded_ideas' in st.session_state:
-        st.info(f"Viewing historical run for: {st.session_state.get('loaded_domain', 'Unknown')}")
-        render_table(st.session_state['loaded_ideas'])
-        if st.button("Clear and Start New Search"):
-            del st.session_state['loaded_ideas']
-            del st.session_state['loaded_domain']
-            st.rerun()
-        return
-    
     # Input form
     with st.form("domain_form"):
         domain = st.text_input(
@@ -692,13 +655,11 @@ def main():
             placeholder="e.g., spotify.com, notion.so, github.com",
             help="Enter a domain to find related subreddits and complaints"
         )
-        
         col1, col2 = st.columns(2)
         with col1:
             max_subreddits = st.slider("Max subreddits to search", 3, 15, 10)
         with col2:
             posts_per_sub = st.slider("Posts per subreddit", 10, 50, 25)
-        
         submitted = st.form_submit_button("Find Product Ideas")
     
     if submitted and domain:
@@ -733,13 +694,13 @@ def main():
         
         st.success(f"Collected {len(all_comments)} total comments")
         
-        # Filter complaints
-        complaint_comments = filter_complaints(all_comments)
+        # Filter complaints (now domain-aware)
+        complaint_comments = filter_complaints(all_comments, domain)
         st.info(f"Found {len(complaint_comments)} complaint-like comments")
         
         if complaint_comments:
             with st.spinner("Analyzing complaints and generating product ideas..."):
-                ideas = extract_ideas(complaint_comments)
+                ideas = extract_ideas(complaint_comments, domain)  # <-- pass domain
             
             st.success(f"Generated {len(ideas)} product ideas!")
             
