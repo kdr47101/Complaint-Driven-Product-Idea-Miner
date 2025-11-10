@@ -1,162 +1,176 @@
 # Complaint-Driven Product Idea Miner
 
-A Streamlit app that discovers product ideas by analyzing Reddit complaints related to any domain or company.
+A Streamlit-powered tool for discovering product opportunities by mining real user complaints from Reddit.
+
+---
+
+## Overview
+
+**Complaint-Driven Product Idea Miner** helps you uncover actionable product ideas by analyzing Reddit discussions for complaints related to any topic, company, or domain. By leveraging Google Gemini's advanced language models and Reddit's vast community data, this app surfaces pain points and unmet needs—turning complaints into innovation.
+
+---
+
+## How It Works
+
+1. **User Input**:  
+   Enter a keyword, company name, or domain (e.g., `spotify`, `notion.so`, `ballet shoes`).
+
+2. **Subreddit Discovery**:  
+   Google Gemini is used to find subreddits that are relevant to your keyword.
+
+3. **Complaint Mining**:  
+   The app fetches top posts from these subreddits and scans their comments for complaint-like language (e.g., "problem", "issue", "hate", "broken", etc.).
+
+4. **AI-Powered Idea Extraction**:  
+   Google Gemini analyzes these complaint comments and extracts a subset that represent potential product ideas, assigning each a subjective relevance score (0-100) indicating how closely the idea relates to your original keyword.
+
+5. **Results Table**:  
+   The top ideas are displayed in a table, including:
+   - Subreddit
+   - Original Comment
+   - Upvotes
+   - Product Idea (concise summary)
+   - Relevance Score (to your keyword)
+
+6. **Export**:  
+   Download the results as a CSV for further analysis.
+
+---
 
 ## Features
 
-- **Domain-based Discovery**: Search for subreddits related to your domain/company
-- **Intelligent Filtering**: Automatically identify complaint-like comments using keyword detection
-- **AI-Powered Extraction**: Use OpenAI to extract structured product ideas from complaints
-- **Interactive Results**: View ideas in a sortable table with links back to original Reddit posts
-- **CSV Export**: Download your results for further analysis
-- **Smart Caching**: Fast performance with automatic caching of API calls
+- **No Coding Required**: Simple Streamlit web interface.
+- **Real User Pain Points**: Surfaces authentic complaints from Reddit communities.
+- **AI Filtering**: Uses Google Gemini to extract and rank only the most relevant product ideas.
+- **Customizable Search**: Adjust number of subreddits and posts per subreddit.
+- **Safe-for-Work**: Filters out NSFW and off-topic subreddits and comments.
+- **Exportable Results**: Download your findings as a CSV file.
 
-## Quickstart
+---
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. Set up API credentials (see below)
-3. Run the app: `streamlit run app.py`
-4. Open `http://localhost:8501` in your browser
-
-## Setup
-
-### Prerequisites
+## Requirements
 
 - Python 3.8+
-- Reddit API credentials (free)
-- OpenAI API key
+- [Reddit API credentials](https://www.reddit.com/prefs/apps) (Client ID, Client Secret, User Agent)
+- [Google Gemini API key](https://makersuite.google.com/app/apikey)
+- [MongoDB Atlas connection URI](https://www.mongodb.com/cloud/atlas) (for saving results/history)
 
-### Installation
+**You must provide your own API keys and credentials for this app to function.**
 
-1. Clone this repository:
+---
+
+## Setup Instructions
+
+### 1. Clone the Repository
+
 ```bash
 git clone <repository-url>
-cd complaint-driven-product-idea-miner
+cd Complaint-Driven-Product-Idea-Miner
 ```
 
-2. Install dependencies:
+### 2. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure API credentials using **one of these methods**:
+### 3. Configure Your Credentials
 
-**Option A: Environment Variables (.env file)**
+You can use either a `.env` file or Streamlit's `.streamlit/secrets.toml`:
+
+#### Option A: `.env` file
+
+Copy the example and fill in your keys:
+
 ```bash
 cp .env.example .env
-# Edit .env with your API credentials
+# Edit .env with your credentials
 ```
 
-**Option B: Streamlit Secrets (Recommended for deployment)**
+#### Option B: Streamlit Secrets (Recommended for deployment)
+
 ```bash
 mkdir -p .streamlit
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 # Edit .streamlit/secrets.toml with your credentials
 ```
 
-### Getting API Credentials
+**Required fields:**
+- `REDDIT_CLIENT_ID`
+- `REDDIT_CLIENT_SECRET`
+- `REDDIT_USER_AGENT`
+- `GEMINI_API_KEY`
+- `MONGODB_URI`
 
-**Reddit API Setup:**
-1. Go to https://www.reddit.com/prefs/apps
-2. Click "Create App" or "Create Another App"
-3. Fill out the form:
-   - **Name**: Your app name (e.g., "Complaint Miner")
-   - **App type**: Select "script"
-   - **Description**: Brief description (optional)
-   - **About URL**: Leave blank or add your GitHub repo
-   - **Redirect URI**: Use `http://localhost:8080` (required but not used)
-4. Click "Create app"
-5. Note your **Client ID** (under the app name) and **Client Secret**
-6. Set a descriptive **User Agent** like: `ComplaintMiner/1.0 by YourRedditUsername`
-
-For more details, see the [PRAW Quick Start Guide](https://praw.readthedocs.io/en/stable/getting_started/quick_start.html) and [Reddit API Documentation](https://www.reddit.com/dev/api/).
-
-**OpenAI API Setup:**
-1. Go to https://platform.openai.com/api-keys
-2. Click "Create new secret key"
-3. Give it a name (e.g., "Complaint Miner")
-4. Copy the API key (you won't see it again)
+---
 
 ## Usage
 
-1. Start the Streamlit app:
-```bash
-streamlit run app.py
-```
+1. **Start the app:**
 
-2. Open your browser to `http://localhost:8501`
+   ```bash
+   streamlit run app.py
+   ```
 
-3. Enter a domain name (e.g., "spotify.com", "notion.so")
+2. **Open your browser** to [http://localhost:8501](http://localhost:8501).
 
-4. Adjust settings:
-   - **Max subreddits**: How many related subreddits to search (3-15)
-   - **Posts per subreddit**: How many recent posts to analyze (10-50)
+3. **Enter a keyword or domain** (e.g., `spotify`, `notion.so`, `ballet shoes`).
 
-5. Click "🔍 Find Product Ideas" and wait for results
+4. **Adjust search parameters** (number of subreddits, posts per subreddit) as desired.
 
-6. Review the generated ideas and download as CSV if needed
+5. **Click "Find Product Ideas"** and wait for the results.
 
-## How It Works
+6. **Review the table** of product ideas, each with subreddit, comment, upvotes, idea, and relevance score.
 
-1. **Subreddit Discovery**: Searches Reddit for posts linking to your domain using `url:domain.com` queries
-2. **Content Gathering**: Fetches recent posts and top-level comments from related subreddits  
-3. **Complaint Detection**: Filters comments containing complaint keywords like "problem", "issue", "hate", "broken"
-4. **Idea Extraction**: Uses OpenAI GPT-3.5-turbo to generate structured product ideas from complaints
-5. **Results Display**: Shows ideas with source attribution and direct links to Reddit posts
+7. **Download as CSV** if needed.
 
-## Rate Limiting & Ethics
+---
 
-- **Respects Reddit API limits**: Automatic throttling when rate limit headers indicate slowdown
-- **Proper attribution**: Uses descriptive User-Agent and follows Reddit API guidelines
-- **Caching**: Network calls cached for 30-60 minutes to reduce API usage
-- **Batch processing**: OpenAI calls batched (10 comments per request) with 1-second delays
+## Data Flow & Filtering
 
-**Important**: This tool respects Reddit's rate limits but can still make many API calls. For heavy usage, consider upgrading to Reddit Premium API or implement longer delays.
+- **Subreddit Selection**:  
+  Only public, safe-for-work (SFW), and topically relevant subreddits are considered. NSFW, quarantined, and generic subreddits are excluded.
 
-## Configuration
+- **Comment Filtering**:  
+  Only comments containing complaint-like keywords are analyzed.
 
-The app supports two credential methods:
+- **AI Extraction**:  
+  Google Gemini is prompted to extract only ideas directly relevant to your keyword, and to assign a subjective relevance score (0-100).
 
-**Environment Variables (.env):**
-```env
-REDDIT_CLIENT_ID=your_client_id
-REDDIT_CLIENT_SECRET=your_client_secret  
-REDDIT_USER_AGENT=ComplaintMiner/1.0 by YourUsername
-OPENAI_API_KEY=sk-your_openai_key
-```
+- **Result Ranking**:  
+  Ideas are ranked by relevance score. Only the top ideas are shown.
 
-**Streamlit Secrets (.streamlit/secrets.toml):**
-```toml
-REDDIT_CLIENT_ID = "your_client_id"
-REDDIT_CLIENT_SECRET = "your_client_secret"
-REDDIT_USER_AGENT = "ComplaintMiner/1.0 by YourUsername"
-OPENAI_API_KEY = "sk-your_openai_key"
-```
+---
 
-Streamlit secrets are recommended for deployments as they're more secure and integrate better with Streamlit Cloud.
+## API Rate Limits & Ethics
 
-## Deployment
+- **Reddit**: The app respects Reddit's API rate limits and uses a descriptive User-Agent.
+- **Google Gemini**: Free tier limits apply (see [Gemini API docs](https://ai.google.dev/)).
+- **MongoDB**: Used for optional result persistence/history.
 
-For deploying to Streamlit Cloud:
-1. Push your code to GitHub (credentials will be git-ignored)
-2. Connect your GitHub repo to [Streamlit Cloud](https://streamlit.io/cloud)
-3. Add your API credentials in the Streamlit Cloud secrets management
-4. Deploy!
+**Please use responsibly and respect all API terms of service.**
 
-## Non-Commercial & API-Compliant Usage
+---
 
-This project is designed for **research, educational, and non-commercial use**. When using this tool:
+## FAQ
 
-- Follow Reddit's [API Terms of Service](https://www.reddit.com/wiki/api-terms)
-- Respect OpenAI's [Usage Policies](https://openai.com/policies/usage-policies)
-- Use reasonable rate limits and don't overwhelm the APIs
-- Validate AI-generated ideas through proper market research
-- Consider the privacy and consent of Reddit users whose comments are analyzed
+**Q: Why do I need my own API keys?**  
+A: Reddit and Google Gemini require authentication for API access. This ensures your usage is private and within their terms.
+
+**Q: Is my data stored?**  
+A: Results can be saved to your own MongoDB Atlas database if you provide a URI. Otherwise, data is only processed in memory.
+
+**Q: Can I use this commercially?**  
+A: This tool is intended for research, educational, and personal use. Validate all ideas independently before pursuing commercially.
+
+---
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License. See [LICENSE](LICENSE) for details.
+
+---
 
 ## Disclaimer
 
-This tool is for research and educational purposes. The generated product ideas are AI suggestions based on public Reddit comments and should be validated through proper market research. Always respect platform terms of service and user privacy.
+This tool uses AI to generate product ideas from public Reddit comments. All ideas are suggestions only and should be validated through proper research. Always respect user privacy and platform terms of service.
